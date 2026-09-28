@@ -1,6 +1,6 @@
 #!/bin/bash
 # inspect-table.sh
-# Inspects schema, row counts, replication state, and sample rows across both nodes.
+# Inspects schema, row counts, replication state, and sample rows across all nodes.
 # Usage: ./scripts/inspect-table.sh [table_name] [limit]
 #   table_name: defaults to "events"
 #   limit:      defaults to 10
@@ -18,90 +18,88 @@ fi
 
 PG1_CONTAINER="${PG1_CONTAINER:-pg1}"
 PG2_CONTAINER="${PG2_CONTAINER:-pg2}"
+PG3_CONTAINER="${PG3_CONTAINER:-pg3}"
 PG_SUPERUSER="${PG_SUPERUSER:-postgres}"
 APP_DB="${APP_DB:-appdb}"
 TABLE="${1:-events}"
 LIMIT="${2:-10}"
 
-# Wrappers
-pg1_sql() { docker exec "$PG1_CONTAINER" psql -U "$PG_SUPERUSER" -d "$APP_DB" "$@"; }
-pg2_sql() { docker exec "$PG2_CONTAINER" psql -U "$PG_SUPERUSER" -d "$APP_DB" "$@"; }
+NODES=("$PG1_CONTAINER" "$PG2_CONTAINER" "$PG3_CONTAINER")
 
 # ── 1. Check containers ───────────────────────────────────────────────────────
 
-if ! docker ps --format '{{.Names}}' | grep -qw "$PG1_CONTAINER"; then
-    echo "ERROR: Container $PG1_CONTAINER is not running." >&2
-    exit 1
-fi
+for node in "${NODES[@]}"; do
+    if ! docker ps --format '{{.Names}}' | grep -qw "$node"; then
+        echo "ERROR: Container $node is not running." >&2
+        exit 1
+    fi
+done
 
-if ! docker ps --format '{{.Names}}' | grep -qw "$PG2_CONTAINER"; then
-    echo "ERROR: Container $PG2_CONTAINER is not running." >&2
-    exit 1
-fi
+run_sql() {
+    local node=$1
+    shift
+    docker exec "$node" psql -U "$PG_SUPERUSER" -d "$APP_DB" "$@"
+}
 
 echo "================================================================================"
 echo " Table Inspection: $TABLE (database: $APP_DB)"
-echo " Nodes: $PG1_CONTAINER (localhost:5432) | $PG2_CONTAINER (localhost:5433)"
+echo " Nodes: pg1 (5432) | pg2 (5433) | pg3 (5434)"
 echo "================================================================================"
 
-# ── 2. Table Schema (pg1) ─────────────────────────────────────────────────────
+# ── 2. Table Schema (from first node) ─────────────────────────────────────────
 
 echo ""
 echo "--- Schema ($PG1_CONTAINER) ---"
-pg1_sql -c "\d $TABLE"
+run_sql "$PG1_CONTAINER" -c "\d $TABLE"
 
 # ── 3. Replication State ──────────────────────────────────────────────────────
 
 echo ""
 echo "--- Logical Replication Status for '$TABLE' ---"
-echo "[$PG1_CONTAINER Subscriptions]:"
-pg1_sql -c "
-SELECT subname, srsubstate,
-       CASE srsubstate
-           WHEN 'i' THEN 'initializing'
-           WHEN 'd' THEN 'data copy'
-           WHEN 's' THEN 'synchronized'
-           WHEN 'r' THEN 'ready (streaming)'
-           ELSE srsubstate::text
-       END AS status
-FROM pg_subscription_rel r
-JOIN pg_subscription s ON s.oid = r.srsubid
-WHERE srrelid = '$TABLE'::regclass;
-" || echo "  (Table not tracked or not found in subscriptions on $PG1_CONTAINER)"
-
-echo "[$PG2_CONTAINER Subscriptions]:"
-pg2_sql -c "
-SELECT subname, srsubstate,
-       CASE srsubstate
-           WHEN 'i' THEN 'initializing'
-           WHEN 'd' THEN 'data copy'
-           WHEN 's' THEN 'synchronized'
-           WHEN 'r' THEN 'ready (streaming)'
-           ELSE srsubstate::text
-       END AS status
-FROM pg_subscription_rel r
-JOIN pg_subscription s ON s.oid = r.srsubid
-WHERE srrelid = '$TABLE'::regclass;
-" || echo "  (Table not tracked or not found in subscriptions on $PG2_CONTAINER)"
+for node in "${NODES[@]}"; do
+    echo "[$node Subscriptions]:"
+    run_sql "$node" -c "
+    SELECT subname, srsubstate,
+           CASE srsubstate
+               WHEN 'i' THEN 'initializing'
+               WHEN 'd' THEN 'data copy'
+               WHEN 's' THEN 'synchronized'
+               WHEN 'r' THEN 'ready (streaming)'
+               ELSE srsubstate::text
+           END AS status
+    FROM pg_subscription_rel r
+    JOIN pg_subscription s ON s.oid = r.srsubid
+    WHERE srrelid = '$TABLE'::regclass;
+    " || echo "  (Table not tracked or not found in subscriptions on $node)"
+done
 
 # ── 4. Row Counts & Parity ────────────────────────────────────────────────────
 
 echo ""
 echo "--- Row Counts & Consistency ---"
-count1=$(pg1_sql -tAc "SELECT count(*) FROM $TABLE;")
-count2=$(pg2_sql -tAc "SELECT count(*) FROM $TABLE;")
+declare -A counts
+all_match=true
+first_count=""
 
-echo "  $PG1_CONTAINER count : $count1"
-echo "  $PG2_CONTAINER count : $count2"
+for node in "${NODES[@]}"; do
+    c=$(run_sql "$node" -tAc "SELECT count(*) FROM $TABLE;")
+    counts["$node"]=$c
+    echo "  $node count : $c"
+    if [ -z "$first_count" ]; then
+        first_count=$c
+    elif [ "$c" -ne "$first_count" ]; then
+        all_match=false
+    fi
+done
 
-if [ "$count1" -eq "$count2" ]; then
-    echo "  Counts Match   : YES"
+if [ "$all_match" = true ]; then
+    echo "  Counts Match   : YES (all $first_count)"
 else
     echo "  Counts Match   : NO (mismatch detected!)"
 fi
 
-# Compare IDs if 'id' column exists
-has_id=$(pg1_sql -tAc "
+# Compare IDs across all nodes if 'id' column exists
+has_id=$(run_sql "$PG1_CONTAINER" -tAc "
 SELECT count(*) FROM information_schema.columns
 WHERE table_name = '$TABLE' AND column_name = 'id';
 ")
@@ -109,27 +107,27 @@ WHERE table_name = '$TABLE' AND column_name = 'id';
 if [ "$has_id" -ge 1 ]; then
     echo ""
     echo "--- ID Parity Check ---"
-    diff_output=$(diff -u \
-        <(pg1_sql -tAc "SELECT id FROM $TABLE ORDER BY id;") \
-        <(pg2_sql -tAc "SELECT id FROM $TABLE ORDER BY id;") || true)
+    diff12=$(diff -u <(run_sql "$PG1_CONTAINER" -tAc "SELECT id FROM $TABLE ORDER BY id;") \
+                    <(run_sql "$PG2_CONTAINER" -tAc "SELECT id FROM $TABLE ORDER BY id;") || true)
+    diff13=$(diff -u <(run_sql "$PG1_CONTAINER" -tAc "SELECT id FROM $TABLE ORDER BY id;") \
+                    <(run_sql "$PG3_CONTAINER" -tAc "SELECT id FROM $TABLE ORDER BY id;") || true)
 
-    if [ -z "$diff_output" ]; then
-        echo "  All IDs match between $PG1_CONTAINER and $PG2_CONTAINER."
+    if [ -z "$diff12" ] && [ -z "$diff13" ]; then
+        echo "  All IDs match across all 3 nodes."
     else
-        echo "  ID Discrepancies detected (-$PG1_CONTAINER, +$PG2_CONTAINER):"
-        echo "$diff_output"
+        echo "  ID Discrepancies detected!"
+        [ -n "$diff12" ] && echo "  pg1 vs pg2 diff:" && echo "$diff12"
+        [ -n "$diff13" ] && echo "  pg1 vs pg3 diff:" && echo "$diff13"
     fi
 fi
 
 # ── 5. Sample Rows ────────────────────────────────────────────────────────────
 
-echo ""
-echo "--- Sample Rows (latest $LIMIT on $PG1_CONTAINER) ---"
-pg1_sql -c "SELECT * FROM $TABLE ORDER BY ctid DESC LIMIT $LIMIT;"
-
-echo ""
-echo "--- Sample Rows (latest $LIMIT on $PG2_CONTAINER) ---"
-pg2_sql -c "SELECT * FROM $TABLE ORDER BY ctid DESC LIMIT $LIMIT;"
+for node in "${NODES[@]}"; do
+    echo ""
+    echo "--- Sample Rows (latest $LIMIT on $node) ---"
+    run_sql "$node" -c "SELECT * FROM $TABLE ORDER BY ctid DESC LIMIT $LIMIT;"
+done
 
 echo ""
 echo "Done."

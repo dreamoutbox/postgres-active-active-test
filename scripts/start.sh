@@ -16,6 +16,7 @@ set +a
 
 PG1_CONTAINER="${PG1_CONTAINER:-pg1}"
 PG2_CONTAINER="${PG2_CONTAINER:-pg2}"
+PG3_CONTAINER="${PG3_CONTAINER:-pg3}"
 PG_SUPERUSER="${PG_SUPERUSER:-postgres}"
 
 # ── 1. Start containers ───────────────────────────────────────────────────────
@@ -23,7 +24,7 @@ PG_SUPERUSER="${PG_SUPERUSER:-postgres}"
 echo "[start] Starting cluster..."
 docker compose -f "$ROOT_DIR/docker-compose.yml" up -d
 
-# ── 2. Wait for both nodes ────────────────────────────────────────────────────
+# ── 2. Wait for all nodes ─────────────────────────────────────────────────────
 
 wait_for_postgres() {
     local container=$1
@@ -44,18 +45,20 @@ wait_for_postgres() {
 
 wait_for_postgres "$PG1_CONTAINER"
 wait_for_postgres "$PG2_CONTAINER"
+wait_for_postgres "$PG3_CONTAINER"
 
 # ── 3. Check if replication already configured ────────────────────────────────
 
 sub_count=$(docker exec "$PG1_CONTAINER" psql -U "$PG_SUPERUSER" -d "$APP_DB" \
     -tAc "SELECT count(*) FROM pg_subscription;" 2>/dev/null || echo 0)
 
-if [ "$sub_count" -ge 1 ]; then
+if [ "$sub_count" -ge 2 ]; then
     echo "[start] Replication already configured ($sub_count subscription(s) on $PG1_CONTAINER). Skipping setup."
 else
-    echo "[start] No subscriptions found — running replication setup..."
+    echo "[start] Subscriptions missing or incomplete ($sub_count found) — running replication setup..."
     PG1_CONTAINER="$PG1_CONTAINER" \
     PG2_CONTAINER="$PG2_CONTAINER" \
+    PG3_CONTAINER="$PG3_CONTAINER" \
     PG_SUPERUSER="$PG_SUPERUSER" \
     APP_DB="$APP_DB" \
     REPLICATOR_PASSWORD="$REPLICATOR_PASSWORD" \
@@ -69,5 +72,6 @@ echo ""
 echo "Cluster is up:"
 echo "  pg1  ->  localhost:5432  ($PG1_CONTAINER)"
 echo "  pg2  ->  localhost:5433  ($PG2_CONTAINER)"
+echo "  pg3  ->  localhost:5434  ($PG3_CONTAINER)"
 echo ""
 echo "Run tests:  ./scripts/test-cluster.sh"

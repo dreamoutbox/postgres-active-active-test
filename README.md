@@ -1,10 +1,14 @@
 # PostgreSQL 18 — Active-Active Cluster (Docker Compose)
 
-Bidirectional logical replication between two PostgreSQL 18 nodes.  
-Both nodes accept reads **and** writes; changes propagate to the peer automatically.
+Full-mesh bidirectional logical replication across three PostgreSQL 18 nodes.  
+All three nodes accept reads **and** writes; changes propagate across all nodes automatically.
 
 ```
-pg1 (localhost:5432)  <──logical replication──>  pg2 (localhost:5433)
+         pg1 (localhost:5432)
+              ▲         ▲
+             ╱           ╲
+            ▼             ▼
+  pg2 (localhost:5433) <───> pg3 (localhost:5434)
 ```
 
 > **Caveat:** PostgreSQL logical replication does not auto-resolve write conflicts  
@@ -20,18 +24,25 @@ pg1 (localhost:5432)  <──logical replication──>  pg2 (localhost:5433)
 │   ├── pg1/
 │   │   ├── postgresql.conf
 │   │   └── pg_hba.conf
-│   └── pg2/
+│   ├── pg2/
+│   │   ├── postgresql.conf
+│   │   └── pg_hba.conf
+│   └── pg3/
 │       ├── postgresql.conf
 │       └── pg_hba.conf
 ├── data/           # created at runtime, git-ignored
 │   ├── pg1/
-│   └── pg2/
+│   ├── pg2/
+│   └── pg3/
 ├── scripts/
 │   ├── init-pg1.sh          # runs once on pg1 first start
 │   ├── init-pg2.sh          # runs once on pg2 first start
-│   ├── setup-replication.sh # wire up subscriptions (run after both nodes are up)
+│   ├── init-pg3.sh          # runs once on pg3 first start
+│   ├── setup-replication.sh # wire up full-mesh subscriptions
 │   ├── test-cluster.sh      # end-to-end replication tests
-│   └── inspect-table.sh     # inspect schema, row parity & sample data across nodes
+│   ├── inspect-table.sh     # inspect schema, row parity & sample data across nodes
+│   ├── start.sh             # wrapper to up containers and wire replication
+│   └── stop.sh              # teardown containers and volumes
 ├── docker-compose.yml
 └── .env                     # credentials (git-ignored)
 ```
@@ -41,39 +52,34 @@ pg1 (localhost:5432)  <──logical replication──>  pg2 (localhost:5433)
 ### 1. Start the cluster
 
 ```bash
+./scripts/start.sh
+```
+
+Or manually:
+
+```bash
 docker compose up -d
-```
-
-Wait until both containers are healthy:
-
-```bash
-docker compose ps
-```
-
-### 2. Wire up replication
-
-```bash
-chmod +x scripts/*.sh
 ./scripts/setup-replication.sh
 ```
 
-This creates:
-- `sub_from_pg2` on pg1 → subscribes to `pub_pg2` on pg2
-- `sub_from_pg1` on pg2 → subscribes to `pub_pg1` on pg1
+This creates full-mesh subscriptions:
+- `pg1` subscribes to `pg2` and `pg3`
+- `pg2` subscribes to `pg1` and `pg3`
+- `pg3` subscribes to `pg1` and `pg2`
 
-### 3. Run the tests
+### 2. Run the tests
 
 ```bash
 ./scripts/test-cluster.sh
 ```
 
-### 4. Inspect table data & parity
+### 3. Inspect table data & parity
 
 ```bash
 ./scripts/inspect-table.sh events 10
 ```
 
-### 5. Connect manually
+### 4. Connect manually
 
 ```bash
 # Node 1
@@ -81,6 +87,9 @@ psql -h localhost -p 5432 -U postgres -d appdb
 
 # Node 2
 psql -h localhost -p 5433 -U postgres -d appdb
+
+# Node 3
+psql -h localhost -p 5434 -U postgres -d appdb
 ```
 
 ## Tear down
