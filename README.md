@@ -30,7 +30,8 @@ pg1 (localhost:5432)  <──logical replication──>  pg2 (localhost:5433)
 │   ├── init-pg1.sh          # runs once on pg1 first start
 │   ├── init-pg2.sh          # runs once on pg2 first start
 │   ├── setup-replication.sh # wire up subscriptions (run after both nodes are up)
-│   └── test-cluster.sh      # end-to-end replication tests
+│   ├── test-cluster.sh      # end-to-end replication tests
+│   └── inspect-table.sh     # inspect schema, row parity & sample data across nodes
 ├── docker-compose.yml
 └── .env                     # credentials (git-ignored)
 ```
@@ -66,7 +67,13 @@ This creates:
 ./scripts/test-cluster.sh
 ```
 
-### 4. Connect manually
+### 4. Inspect table data & parity
+
+```bash
+./scripts/inspect-table.sh events 10
+```
+
+### 5. Connect manually
 
 ```bash
 # Node 1

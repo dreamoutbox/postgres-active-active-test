@@ -15,22 +15,24 @@ GRANT CONNECT ON DATABASE $APP_DB TO replicator;
 SQL
 
 psql -v ON_ERROR_STOP=1 --username "$PG_USER" --dbname "$APP_DB" <<SQL
--- Sequence: starts at 1, increments by 2 (pg1 owns odd IDs: 1, 3, 5 ...)
--- This avoids PK conflicts when pg2 generates even IDs: 2, 4, 6 ...
-CREATE SEQUENCE events_id_seq START 1 INCREMENT 2;
-
+-- Use UUID (gen_random_uuid) for globally unique, collision-free primary keys across all nodes.
 CREATE TABLE IF NOT EXISTS events (
-    id          BIGINT      PRIMARY KEY DEFAULT nextval('events_id_seq'),
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     node        TEXT        NOT NULL,
     payload     TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Allow replicator role to access and look up objects inside the public schema
 GRANT USAGE ON SCHEMA public TO replicator;
+
+-- Allow replicator role to read existing rows during initial table sync (copy_data)
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO replicator;
-GRANT USAGE ON SEQUENCE events_id_seq TO replicator;
+
+-- Automatically grant SELECT to replicator on any newly created tables in the future
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO replicator;
 
+-- Create publication that captures and streams WAL changes (INSERT/UPDATE/DELETE/TRUNCATE) for all tables
 CREATE PUBLICATION pub_pg1 FOR ALL TABLES;
 SQL
 
