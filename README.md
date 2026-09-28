@@ -30,10 +30,6 @@ All three nodes accept reads **and** writes; changes propagate across all nodes 
 │   └── pg3/
 │       ├── postgresql.conf
 │       └── pg_hba.conf
-├── data/           # created at runtime, git-ignored
-│   ├── pg1/
-│   ├── pg2/
-│   └── pg3/
 ├── scripts/
 │   ├── init-pg1.sh          # runs once on pg1 first start
 │   ├── init-pg2.sh          # runs once on pg2 first start

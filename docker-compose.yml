@@ -1,3 +1,8 @@
+volumes:
+  pg1_data:
+  pg2_data:
+  pg3_data:
+
 services:
   pg1:
     image: postgres:18
@@ -12,7 +17,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - ./data/pg1:/var/lib/postgresql
+      - pg1_data:/var/lib/postgresql
       - ./config/pg1/postgresql.conf:/etc/postgresql/postgresql.conf:ro
       - ./config/pg1/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
       - ./scripts/init-pg1.sh:/docker-entrypoint-initdb.d/init-pg1.sh:ro
@@ -41,7 +46,7 @@ services:
     ports:
       - "5433:5432"
     volumes:
-      - ./data/pg2:/var/lib/postgresql
+      - pg2_data:/var/lib/postgresql
       - ./config/pg2/postgresql.conf:/etc/postgresql/postgresql.conf:ro
       - ./config/pg2/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
       - ./scripts/init-pg2.sh:/docker-entrypoint-initdb.d/init-pg2.sh:ro
@@ -70,7 +75,7 @@ services:
     ports:
       - "5434:5432"
     volumes:
-      - ./data/pg3:/var/lib/postgresql
+      - pg3_data:/var/lib/postgresql
       - ./config/pg3/postgresql.conf:/etc/postgresql/postgresql.conf:ro
       - ./config/pg3/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
       - ./scripts/init-pg3.sh:/docker-entrypoint-initdb.d/init-pg3.sh:ro
